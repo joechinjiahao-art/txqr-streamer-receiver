@@ -2,198 +2,126 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>TXQR Receiver Client</title>
-    
-    <!-- CRITICAL FIX: Verified, production-ready video scanning library path via cdnjs -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html5-qrcode/2.3.8/html5-qrcode.min.js"></script>
-    
+    <title>TXQR RECEIVER - GAP ANALYZER</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 500px; margin: 20px auto; padding: 0 15px; text-align: center; background: #f4f6f8; color: #333; }
-        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.06); }
-        
-        #reader { width: 100%; min-height: 250px; background: #000; border-radius: 8px; overflow: hidden; margin: 15px auto; border: 1px solid #ddd; }
-        
-        .progress-box { margin: 20px 0; background: #e0e0e0; border-radius: 6px; overflow: hidden; height: 24px; position: relative; }
-        .bar { height: 100%; width: 0%; background: #2ec4b6; transition: width 0.15s ease-in-out; }
-        .percent { position: absolute; width: 100%; top: 0; left: 0; line-height: 24px; font-size: 12px; font-weight: bold; color: #111; }
-        
-        #status { font-weight: 700; margin: 15px 0; font-size: 15px; color: #444; min-height: 22px; }
-        
-        /* Interactive Controller Alignment Layout Buttons */
-        .btn-panel { display: flex; flex-direction: column; gap: 10px; align-items: center; margin-top: 15px; }
-        .action-btn { width: 100%; max-width: 280px; padding: 14px 24px; color: white; border: none; border-radius: 6px; font-weight: bold; font-size: 15px; cursor: pointer; transition: background 0.2s, transform 0.1s; }
-        .action-btn:active { transform: scale(0.98); }
-        
-        #cameraToggleBtn { background-color: #0070f3; box-shadow: 0 2px 6px rgba(0,112,243,0.3); }
-        #cameraToggleBtn.active { background-color: #ff3333; box-shadow: 0 2px 6px rgba(255,51,51,0.3); }
-        #downloadBtn { background-color: #2ec4b6; box-shadow: 0 2px 6px rgba(46,196,182,0.3); display: none; }
-        
-        .ios-hint { font-size: 12px; color: #666; margin-top: 15px; background: #fff3cd; color: #856404; padding: 10px; border-radius: 6px; text-align: left; line-height: 1.4; }
+        body { background: #000; color: #00ff41; font-family: monospace; margin: 0; padding: 20px; text-align: center; }
+        .container { display: flex; flex-direction: column; align-items: center; gap: 15px; }
+        video { border: 2px solid #333; width: 100%; max-width: 500px; background: #111; }
+        .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 500px; text-align: left; }
+        .stat-box { background: #111; padding: 10px; border: 1px solid #00ff41; }
+        .missing-box { 
+            background: #1a0000; color: #ff4444; border: 1px solid #ff4444; 
+            padding: 10px; width: 500px; height: 80px; overflow-y: auto; text-align: left; word-break: break-all;
+        }
+        progress { width: 100%; height: 20px; }
+        textarea { width: 500px; height: 100px; background: #222; color: #fff; margin-top: 10px; }
+        .btn { padding: 10px 20px; background: #00ff41; color: #000; border: none; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
 
-<div class="card">
-    <h2>TXQR Receiver Client</h2>
-    <p style="font-size: 14px; color: #666; margin-top:-5px;">Point camera at the animated stream to recover the file</p>
+<div class="container">
+    <h2>TXQR RECEIVER V5</h2>
     
-    <div id="reader"></div>
+    <video id="video" autoplay playsinline></video>
     
-    <div class="progress-box">
-        <div class="bar" id="progressBar"></div>
-        <div class="percent" id="progressText">0% Chunks Received</div>
-    </div>
-    
-    <div id="status">Camera offline. Press the button below to begin.</div>
-    
-    <div class="btn-panel">
-        <!-- Interactive trigger options required for hardware system activation -->
-        <button id="cameraToggleBtn" class="action-btn" onclick="toggleCamera()">Switch Camera On</button>
-        <button id="downloadBtn" class="action-btn" onclick="downloadAssembledFile()">Download Assembled File</button>
+    <div class="dashboard">
+        <div class="stat-box">PROGRESS: <span id="progText">0/0</span></div>
+        <div class="stat-box">STATUS: <span id="status">IDLE</span></div>
     </div>
 
-    <div class="ios-hint">
-        <strong>iPhone Operations Check:</strong> iOS sandboxes strictly require user gesture interactions to open video capture streams, and the source must be completely loaded over safe <strong>HTTPS</strong>.
+    <progress id="progBar" value="0" max="100"></progress>
+
+    <div class="missing-box">
+        <strong>MISSING FRAMES:</strong><br>
+        <span id="missingList">Waiting for data...</span>
     </div>
+
+    <button class="btn" onclick="startCamera()">Start Camera</button>
+    <textarea id="output" placeholder="Reconstructed data will appear here..."></textarea>
 </div>
 
 <script>
-    let html5QrEngine = null;
-    let isCameraRunning = false;
-    let receivedChunks = {};
-    let totalExpectedChunks = null;
-    let assembledBase64 = "";
+let receivedChunks = new Map();
+let totalChunks = 0;
+let isProcessing = false;
 
-    function toggleCamera() {
-        const btn = document.getElementById('cameraToggleBtn');
-        const statusEl = document.getElementById('status');
-
-        if (isCameraRunning) {
-            stopScanning();
-        } else {
-            // Lazy initialization context ensures library execution follows direct touch actions
-            if (!html5QrEngine) {
-                html5QrEngine = new Html5Qrcode("reader");
-            }
-            
-            statusEl.innerText = "Requesting smartphone lens connection...";
-            
-            // Execute video channel connection targets
-            html5QrEngine.start(
-                { facingMode: "environment" }, // Forces use of back-facing lenses
-                { fps: 15, qrbox: (width, height) => { return { width: Math.floor(Math.min(width, height) * 0.75), height: Math.floor(Math.min(width, height) * 0.75) }; } },
-                onScanSuccess,
-                onScanError
-            )
-            .then(() => {
-                isCameraRunning = true;
-                btn.innerText = "Switch Camera Off";
-                btn.classList.add('active');
-                statusEl.innerText = "Camera active. Target the animated streaming grid.";
-            })
-            .catch(err => {
-                statusEl.innerText = "Camera Connection Error: Access rejected or pipeline blocked.";
-                console.error(err);
-            });
-        }
+async function startCamera() {
+    const video = document.getElementById('video');
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+        video.srcObject = stream;
+        document.getElementById('status').innerText = "SCANNING...";
+        scan();
+    } catch (err) {
+        alert("Camera error: " + err);
     }
+}
 
-    function stopScanning() {
-        if (!html5QrEngine || !isCameraRunning) return;
-        
-        html5QrEngine.stop().then(() => {
-            isCameraRunning = false;
-            const btn = document.getElementById('cameraToggleBtn');
-            btn.innerText = "Switch Camera On";
-            btn.classList.remove('active');
-            document.getElementById('status').innerText = "Camera deactivated.";
-        }).catch(err => console.error("Error pausing lens hook: ", err));
-    }
+async function scan() {
+    const video = document.getElementById('video');
+    const barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
 
-    function onScanSuccess(decodedText) {
-        if (!decodedText.includes('/') || !decodedText.includes('|')) return;
-
+    setInterval(async () => {
         try {
-            const parts = decodedText.split('|');
-            const header = parts[0].split('/');
-            const chunkIndex = parseInt(header[0], 10);
-            const totalChunks = parseInt(header[1], 10);
-            const payload = parts[1];
-
-            if (isNaN(chunkIndex) || isNaN(totalChunks) || !payload) return;
-
-            if (totalExpectedChunks === null) {
-                totalExpectedChunks = totalChunks;
-            }
-
-            if (!receivedChunks[chunkIndex]) {
-                receivedChunks[chunkIndex] = payload;
-                updateProgress();
-            }
-
-            // Fire file compiling check rules
-            if (Object.keys(receivedChunks).length === totalExpectedChunks && assembledBase64 === "") {
-                processCompletion();
+            const barcodes = await barcodeDetector.detect(video);
+            if (barcodes.length > 0) {
+                processData(barcodes[0].rawValue);
             }
         } catch (e) {
-            console.error("Frame read failure details: ", e);
+            // Some browsers require polyfills or specific flags for BarcodeDetector
+        }
+    }, 100); // Scan every 100ms
+}
+
+function processData(val) {
+    // Format: "index/total|data"
+    const match = val.match(/^(\d+)\/(\d+)\|(.*)/s);
+    if (!match) return;
+
+    const idx = parseInt(match[1]);
+    const total = parseInt(match[2]);
+    const content = match[3];
+
+    if (totalChunks === 0) totalChunks = total;
+    
+    if (!receivedChunks.has(idx)) {
+        receivedChunks.set(idx, content);
+        updateUI();
+    }
+}
+
+function updateUI() {
+    const count = receivedChunks.size;
+    document.getElementById('progText').innerText = `${count} / ${totalChunks}`;
+    document.getElementById('progBar').max = totalChunks;
+    document.getElementById('progBar').value = count;
+
+    // Calculate Missing
+    let missing = [];
+    for (let i = 1; i <= totalChunks; i++) {
+        if (!receivedChunks.has(i)) {
+            missing.push(i);
         }
     }
 
-    function onScanError(err) {
-        // Suppressed to optimize calculation execution tracks on mobile browsers
+    if (missing.length === 0 && totalChunks > 0) {
+        document.getElementById('status').innerText = "COMPLETE!";
+        document.getElementById('missingList').innerText = "None - All parts received.";
+        assembleData();
+    } else {
+        // Show missing as ranges to save space (e.g., 5-10, 15, 20-25)
+        document.getElementById('missingList').innerText = missing.join(', ');
     }
+}
 
-    function updateProgress() {
-        const count = Object.keys(receivedChunks).length;
-        const pct = Math.round((count / totalExpectedChunks) * 100);
-        
-        document.getElementById('progressBar').style.width = pct + "%";
-        document.getElementById('progressText').innerText = `Progress: ${pct}% (${count}/${totalExpectedChunks})`;
-        document.getElementById('status').innerText = `Receiving data chunks. Keep device steady...`;
+function assembleData() {
+    let finalStr = "";
+    for (let i = 1; i <= totalChunks; i++) {
+        finalStr += receivedChunks.get(i);
     }
-
-    function processCompletion() {
-        stopScanning();
-        document.getElementById('status').innerText = "Data stream matches. Merging segments...";
-        
-        let finalB64 = "";
-        for (let i = 1; i <= totalExpectedChunks; i++) {
-            finalB64 += receivedChunks[i];
-        }
-        assembledBase64 = finalB64;
-        
-        document.getElementById('status').innerText = "File processing complete! Ready for local file assembly storage.";
-        
-        // Show the download button explicitly
-        document.getElementById('downloadBtn').style.display = "block";
-    }
-
-    function downloadAssembledFile() {
-        if (!assembledBase64) return;
-        
-        try {
-            const byteCharacters = atob(assembledBase64);
-            const byteNumbers = new Array(byteCharacters.length);
-            for (let i = 0; i < byteCharacters.length; i++) {
-                byteNumbers[i] = byteCharacters.charCodeAt(i);
-            }
-            const byteArray = new Uint8Array(byteNumbers);
-            const blob = new Blob([byteArray], { type: "application/octet-stream" });
-
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
-            link.download = "txqr_transferred_file.dat"; // Universal raw bundle wrapper format extension
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-            
-            document.getElementById('status').innerText = "Download pipeline completed successfully.";
-        } catch (error) {
-            alert("Base64 string decode failure: " + error.message);
-        }
-    }
+    document.getElementById('output').value = finalStr;
+}
 </script>
 </body>
 </html>
