@@ -2,85 +2,156 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>TXQR V8.2 - PERMISSION FIX</title>
+    <title>TXQR V8.3 - STABLE SCAN</title>
     <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
         body { background: #000; color: #00ff41; font-family: monospace; text-align: center; }
         .box { border: 2px solid #00ff41; display: inline-block; padding: 20px; background: #050505; width: 90%; max-width: 600px; border-radius: 8px; }
-        #video-preview { width: 100%; border: 1px solid #333; background: #111; margin-top: 15px; border-radius: 4px; }
-        .btn-start { background: #00ff41; color: #000; padding: 20px; font-weight: bold; border: none; cursor: pointer; width: 100%; font-size: 16px; border-radius: 4px; }
-        .hint { color: #888; font-size: 11px; margin-top: 10px; }
-        #status-msg { margin: 10px 0; font-weight: bold; }
+        #video-container { position: relative; margin: 15px 0; }
+        #video-preview { width: 100%; border: 2px solid #333; border-radius: 4px; }
+        .scan-flash { position: absolute; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,255,65,0.2); display: none; pointer-events: none; }
+        .controls { display: flex; gap: 10px; margin-bottom: 15px; }
+        .btn { flex: 1; padding: 15px; font-weight: bold; border: none; cursor: pointer; text-transform: uppercase; border-radius: 4px; }
+        .btn-start { background: #00ff41; color: #000; }
+        .btn-stop { background: #ff4444; color: #fff; }
+        .stats { text-align: left; background: #111; padding: 15px; border: 1px solid #222; }
+        #missing-list { color: #ff4444; font-size: 11px; margin-top: 10px; overflow-wrap: break-word; max-height: 60px; overflow-y: auto; }
+        progress { width: 100%; accent-color: #00ff41; height: 10px; }
     </style>
 </head>
 <body>
 
 <div class="box">
-    <h2>TXQR RECEIVER V8.2</h2>
-    <div id="status-msg">READY</div>
-
-    <div id="setup-view">
-        <button class="btn-start" onclick="initCamera()">GRANT CAMERA ACCESS</button>
-        <p class="hint">If clicking doesn't work, click the 🔒 icon in the URL bar and reset permissions.</p>
+    <h2>TXQR RECEIVER V8.3</h2>
+    
+    <div class="controls">
+        <button id="startBtn" class="btn btn-start" onclick="initCamera()">Start Camera</button>
+        <button id="stopBtn" class="btn btn-stop" onclick="stopCamera()" style="display:none;">Pause Camera</button>
     </div>
 
-    <video id="video-preview" autoplay playsinline hidden></video>
+    <div id="video-container">
+        <video id="video-preview" autoplay playsinline hidden></video>
+        <div id="flash" class="scan-flash"></div>
+    </div>
     <canvas id="hidden-canvas" hidden></canvas>
     
-    <div style="text-align: left; background: #111; padding: 15px; margin-top: 10px; border: 1px solid #222;">
-        PROGRESS: <b id="count">0</b> / <b id="total">?</b>
-        <progress id="pBar" value="0" max="100" style="width:100%; accent-color:#00ff41;"></progress>
+    <div class="stats">
+        <div style="display:flex; justify-content:space-between;">
+            <span>PROG: <b id="count">0</b> / <b id="total">?</b></span>
+            <span id="percent">0%</span>
+        </div>
+        <progress id="pBar" value="0" max="100"></progress>
+        <div id="missing-list">READY TO SCAN</div>
     </div>
+
+    <textarea id="result" style="width:100%; height:60px; margin-top:10px; background:#111; color:#555; border:1px solid #333;" readonly></textarea>
 </div>
 
 <script>
+    const video = document.getElementById("video-preview");
+    const canvasElement = document.getElementById("hidden-canvas");
+    const canvas = canvasElement.getContext("2d", { willReadFrequently: true });
+    const flash = document.getElementById("flash");
+    const chunks = new Map();
+    let totalFrames = 0;
+    let scanning = false;
+    let stream = null;
+
     async function initCamera() {
-        const msg = document.getElementById("status-msg");
-        msg.innerText = "REQUESTING ACCESS...";
-        msg.style.color = "#ffff00";
-
-        const constraints = {
-            video: {
-                facingMode: "environment", // Specifically ask for back camera
-                width: { ideal: 1280 },
-                height: { ideal: 720 }
-            }
-        };
-
         try {
-            const stream = await navigator.mediaDevices.getUserMedia(constraints);
-            const video = document.getElementById("video-preview");
+            stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
+            });
             video.srcObject = stream;
             video.hidden = false;
-            document.getElementById("setup-view").hidden = true;
-            msg.innerText = "CAMERA ACTIVE";
-            msg.style.color = "#00ff41";
-            
-            // Start the scanning loop
+            document.getElementById("startBtn").style.display = "none";
+            document.getElementById("stopBtn").style.display = "block";
+            scanning = true;
             requestAnimationFrame(tick);
         } catch (err) {
-            console.error(err);
-            msg.innerText = "ACCESS DENIED";
-            msg.style.color = "#ff4444";
-            alert("Error: " + err.name + "\nCheck if another app is using the camera or if permissions are blocked in OS settings.");
+            alert("Camera error: " + err.message);
         }
     }
 
-    // ... (rest of the scan logic remains the same as V8.1)
+    function stopCamera() {
+        if (stream) {
+            stream.getTracks().forEach(track => track.stop());
+            video.hidden = true;
+            document.getElementById("startBtn").style.display = "block";
+            document.getElementById("startBtn").innerText = "Resume Camera";
+            document.getElementById("stopBtn").style.display = "none";
+            scanning = false;
+        }
+    }
+
     function tick() {
-        const video = document.getElementById("video-preview");
-        const canvasElement = document.getElementById("hidden-canvas");
-        const canvas = canvasElement.getContext("2d", { willReadFrequently: true });
-        
+        if (!scanning) return;
+
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
             canvasElement.height = video.videoHeight;
             canvasElement.width = video.videoWidth;
             canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
             const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
-            const code = jsQR(imageData.data, imageData.width, imageData.height);
-            if (code) { /* process data as before */ }
+            
+            const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
+
+            if (code) {
+                // Flash effect
+                flash.style.display = "block";
+                setTimeout(() => { flash.style.display = "none"; }, 100);
+                processData(code.data);
+            }
         }
-        requestAnimationFrame(tick);
+        // Slow down the tick slightly to 15fps to allow the CPU to process the chunks
+        setTimeout(() => { requestAnimationFrame(tick); }, 66);
+    }
+
+    function processData(data) {
+        const parts = data.match(/^(\d+)\/(\d+)\|(.*)/s);
+        if (!parts) return;
+
+        const currentIdx = parseInt(parts[1]);
+        const totalIdx = parseInt(parts[2]);
+        const payload = parts[3];
+
+        if (totalFrames === 0) {
+            totalFrames = totalIdx;
+            document.getElementById("total").innerText = totalFrames;
+            document.getElementById("pBar").max = totalFrames;
+        }
+
+        if (!chunks.has(currentIdx)) {
+            chunks.set(currentIdx, payload);
+            updateUI();
+        }
+    }
+
+    function updateUI() {
+        const count = chunks.size;
+        document.getElementById("count").innerText = count;
+        document.getElementById("pBar").value = count;
+        document.getElementById("percent").innerText = Math.floor((count/totalFrames)*100) + "%";
+        
+        if (count === totalFrames) {
+            document.getElementById("missing-list").innerHTML = "<span style='color:#00ff41'>COMPLETE</span>";
+            assemble();
+            stopCamera();
+        } else {
+            // Find first missing range
+            let firstMissing = -1;
+            for(let i=1; i<=totalFrames; i++) {
+                if(!chunks.has(i)) { firstMissing = i; break; }
+            }
+            document.getElementById("missing-list").innerText = "Next needed: " + firstMissing;
+        }
+    }
+
+    function assemble() {
+        let full = "";
+        for (let i = 1; i <= totalFrames; i++) { full += chunks.get(i); }
+        const resBox = document.getElementById("result");
+        resBox.value = full;
+        resBox.style.color = "#00ff41";
     }
 </script>
 </body>
