@@ -2,118 +2,150 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>TXQR RECEIVER V22.0</title>
+    <title>TXQR MASTER V23.0</title>
     <style>
-        body { background: #000; color: #00ff41; font-family: monospace; text-align: center; padding: 20px; }
-        .box { border: 2px solid #00ff41; display: inline-block; padding: 25px; background: #050505; border-radius: 12px; width: 90%; max-width: 500px; }
-        #video-preview { width: 100%; border: 2px solid #333; transform: scaleX(-1); margin-bottom: 15px; }
-        .progress-container { background: #222; height: 30px; border-radius: 15px; overflow: hidden; margin: 15px 0; border: 1px solid #00ff41; }
-        #progress-bar { width: 0%; height: 100%; background: #00ff41; transition: width 0.2s; }
-        #save-btn { padding: 20px; width: 100%; font-weight: bold; font-size: 18px; cursor: pointer; display: none; background: #00ff41; color: #000; border: none; }
-        .stats { display: flex; justify-content: space-between; font-size: 14px; margin-bottom: 5px; }
+        body { background: #000; color: #00ff41; font-family: 'Courier New', monospace; text-align: center; padding: 20px; }
+        .container { border: 2px solid #00ff41; display: inline-block; padding: 25px; background: #050505; border-radius: 12px; width: 90%; max-width: 600px; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
+        #video-preview { width: 100%; border: 2px solid #333; background: #111; margin-bottom: 15px; border-radius: 4px; }
+        .ui-panel { background: #111; padding: 15px; border: 1px solid #333; margin: 10px 0; }
+        .progress-box { background: #222; height: 25px; border: 1px solid #00ff41; margin: 10px 0; position: relative; }
+        #bar { width: 0%; height: 100%; background: #00ff41; transition: width 0.3s; }
+        button { padding: 12px 20px; margin: 5px; cursor: pointer; font-weight: bold; border: none; text-transform: uppercase; }
+        .btn-cam { background: #0088ff; color: #fff; }
+        .btn-stop { background: #ff4444; color: #fff; }
+        .btn-download { background: #00ff41; color: #000; display: none; width: 100%; font-size: 1.2em; margin-top: 10px; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; margin-bottom: 10px; }
+        .missing-tag { color: #ffbc00; font-weight: bold; }
     </style>
 </head>
 <body>
 
-<div class="box">
-    <h3>TXQR RECEIVER V22.0</h3>
+<div class="container">
+    <h2>TXQR RECEIVER V23.0</h2>
+    
     <video id="video-preview" autoplay playsinline></video>
-    
-    <div class="stats">
-        <span>COLLECTED: <b id="count">0</b> / <b id="total">?</b></span>
-        <span>PROGRESS: <b id="percent">0%</b></span>
-    </div>
-    
-    <div class="progress-container">
-        <div id="progress-bar"></div>
+
+    <div class="ui-panel">
+        <button class="btn-cam" onclick="initCamera()">📷 START CAMERA</button>
+        <button class="btn-stop" onclick="killCamera()">🛑 STOP CAMERA</button>
     </div>
 
-    <button id="save-btn" onclick="downloadAssembly()">💾 SAVE ASSEMBLED FILE</button>
-    <p id="status">INITIALIZING CAMERA...</p>
+    <div class="info-grid">
+        <div>COLLECTED: <b id="count">0</b> / <b id="total">?</b></div>
+        <div>STATUS: <b id="status">IDLE</b></div>
+        <div>PROGRESS: <b id="percent">0%</b></div>
+        <div>NEXT MISSING: <span id="next-missing" class="missing-tag">NONE</span></div>
+    </div>
+
+    <div class="progress-box"><div id="bar"></div></div>
+
+    <button id="download-btn" class="btn-download" onclick="reconstructAndSave()">💾 DOWNLOAD ASSEMBLED FILE</button>
 </div>
 
-<!-- ZXING SCANNER ENGINE -->
 <script src="https://unpkg.com/@zxing/library@latest"></script>
 
 <script>
-    const codeReader = new ZXing.BrowserMultiFormatReader();
-    const collectedChunks = new Map();
-    let totalExpected = 0;
+    let codeReader = new ZXing.BrowserMultiFormatReader();
+    let videoStream = null;
+    let collectedChunks = new Map();
+    let totalFrames = 0;
+    let isScanning = false;
 
-    // Start Camera
-    codeReader.decodeFromVideoDevice(null, 'video-preview', (result, err) => {
-        if (result) {
-            processFrame(result.text);
+    async function initCamera() {
+        try {
+            const devices = await codeReader.listVideoInputDevices();
+            const selectedId = devices[0].deviceId;
+            isScanning = true;
+            document.getElementById('status').innerText = "SCANNING...";
+            
+            codeReader.decodeFromVideoDevice(selectedId, 'video-preview', (result, err) => {
+                if (result && isScanning) {
+                    handlePacket(result.text);
+                }
+            });
+        } catch (e) {
+            alert("Camera access denied or not found.");
         }
-    });
+    }
 
-    function processFrame(content) {
-        // Format expected: "1/500|base64data"
-        const parts = content.split('|');
+    function killCamera() {
+        isScanning = false;
+        codeReader.reset();
+        document.getElementById('status').innerText = "CAMERA OFF";
+    }
+
+    function handlePacket(raw) {
+        // Format: "1/500|base64..."
+        const parts = raw.split('|');
         if (parts.length < 2) return;
 
         const meta = parts[0].split('/');
-        const currentIdx = parseInt(meta[0]);
-        const totalIdx = parseInt(meta[1]);
-        const data = parts[1];
+        const current = parseInt(meta[0]);
+        const total = parseInt(meta[1]);
+        const content = parts[1];
 
-        if (!totalExpected) totalExpected = totalIdx;
-        document.getElementById('total').innerText = totalExpected;
+        if (!totalFrames) totalFrames = total;
 
-        if (!collectedChunks.has(currentIdx)) {
-            collectedChunks.set(currentIdx, data);
-            updateUI();
+        if (!collectedChunks.has(current)) {
+            collectedChunks.set(current, content);
+            refreshUI();
         }
     }
 
-    function updateUI() {
+    function refreshUI() {
         const count = collectedChunks.size;
-        const progress = (count / totalExpected) * 100;
+        const progress = (count / totalFrames) * 100;
         
         document.getElementById('count').innerText = count;
-        document.getElementById('progress-bar').style.width = progress + "%";
+        document.getElementById('total').innerText = totalFrames;
         document.getElementById('percent').innerText = Math.round(progress) + "%";
+        document.getElementById('bar').style.width = progress + "%";
 
-        if (count === totalExpected && totalExpected > 0) {
-            document.getElementById('status').innerText = "TRANSFER COMPLETE!";
-            document.getElementById('save-btn').style.display = "block";
-        } else {
-            document.getElementById('status').innerText = "SCANNING STREAM...";
+        // Find Next Missing Frame
+        let nextMissing = "NONE";
+        for (let i = 1; i <= totalFrames; i++) {
+            if (!collectedChunks.has(i)) {
+                nextMissing = i;
+                break;
+            }
+        }
+        document.getElementById('next-missing').innerText = nextMissing;
+
+        if (count === totalFrames && totalFrames > 0) {
+            document.getElementById('status').innerText = "COMPLETE!";
+            document.getElementById('download-btn').style.display = "block";
+            killCamera();
         }
     }
 
-    function downloadAssembly() {
-        document.getElementById('status').innerText = "ASSEMBLING BINARY... PLEASE WAIT.";
+    function reconstructAndSave() {
+        document.getElementById('status').innerText = "ASSEMBLING...";
         
-        // Sort chunks in order
-        let fullBase64 = "";
-        for (let i = 1; i <= totalExpected; i++) {
-            fullBase64 += collectedChunks.get(i);
-        }
+        try {
+            let fullBase64 = "";
+            for (let i = 1; i <= totalFrames; i++) {
+                fullBase64 += collectedChunks.get(i);
+            }
 
-        // Convert Base64 to Blob
-        const byteCharacters = atob(fullBase64);
-        const byteNumbers = new Array(byteCharacters.length);
-        for (let i = 0; i < byteCharacters.length; i++) {
-            byteNumbers[i] = byteCharacters.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        const blob = new Blob([byteArray], {type: "application/octet-stream"});
+            // Convert to binary
+            const binaryString = atob(fullBase64);
+            const bytes = new Uint8Array(binaryString.length);
+            for (let i = 0; i < binaryString.length; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
 
-        // Trigger Download
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = "received_file_" + Date.now() + ".bin";
-        document.body.appendChild(a);
-        a.click();
-        
-        // Cleanup
-        setTimeout(() => {
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            document.getElementById('status').innerText = "FILE SAVED.";
-        }, 100);
+            const blob = new Blob([bytes], { type: "application/octet-stream" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = "txqr_transfer_" + new Date().getTime() + ".bin";
+            a.click();
+            
+            document.getElementById('status').innerText = "SAVED!";
+        } catch (e) {
+            alert("Reconstruction failed. Ensure the base64 data was valid.");
+            console.error(e);
+        }
     }
 </script>
 </body>
