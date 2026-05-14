@@ -2,126 +2,103 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>TXQR RECEIVER - GAP ANALYZER</title>
+    <title>TXQR RECEIVER V6 - STABLE</title>
+    <!-- You MUST have jsQR.js in the same folder for this to work offline -->
+    <script src="jsQR.js"></script>
     <style>
-        body { background: #000; color: #00ff41; font-family: monospace; margin: 0; padding: 20px; text-align: center; }
-        .container { display: flex; flex-direction: column; align-items: center; gap: 15px; }
-        video { border: 2px solid #333; width: 100%; max-width: 500px; background: #111; }
-        .dashboard { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 500px; text-align: left; }
-        .stat-box { background: #111; padding: 10px; border: 1px solid #00ff41; }
-        .missing-box { 
-            background: #1a0000; color: #ff4444; border: 1px solid #ff4444; 
-            padding: 10px; width: 500px; height: 80px; overflow-y: auto; text-align: left; word-break: break-all;
-        }
-        progress { width: 100%; height: 20px; }
-        textarea { width: 500px; height: 100px; background: #222; color: #fff; margin-top: 10px; }
-        .btn { padding: 10px 20px; background: #00ff41; color: #000; border: none; cursor: pointer; font-weight: bold; }
+        body { background: #000; color: #00ff41; font-family: monospace; text-align: center; }
+        #preview { border: 2px solid #00ff41; width: 100%; max-width: 500px; }
+        .stats { background: #111; padding: 15px; margin: 10px auto; width: 470px; border: 1px solid #333; text-align: left; }
+        .missing { color: #ff4444; border-top: 1px solid #333; margin-top: 10px; padding-top: 10px; word-wrap: break-word; }
+        .success { color: #00ff41; font-weight: bold; }
     </style>
 </head>
 <body>
-
-<div class="container">
-    <h2>TXQR RECEIVER V5</h2>
-    
+    <h2>TXQR RECEIVER V6</h2>
+    <canvas id="canvas" hidden></canvas>
     <video id="video" autoplay playsinline></video>
     
-    <div class="dashboard">
-        <div class="stat-box">PROGRESS: <span id="progText">0/0</span></div>
-        <div class="stat-box">STATUS: <span id="status">IDLE</span></div>
+    <div class="stats">
+        <div>PROGRESS: <span id="count">0</span> / <span id="total">?</span></div>
+        <div id="missing-list" class="missing">MISSING: Waiting for first frame...</div>
     </div>
 
-    <progress id="progBar" value="0" max="100"></progress>
-
-    <div class="missing-box">
-        <strong>MISSING FRAMES:</strong><br>
-        <span id="missingList">Waiting for data...</span>
-    </div>
-
-    <button class="btn" onclick="startCamera()">Start Camera</button>
-    <textarea id="output" placeholder="Reconstructed data will appear here..."></textarea>
-</div>
+    <textarea id="result" style="width:500px; height:100px;" readonly></textarea>
 
 <script>
-let receivedChunks = new Map();
-let totalChunks = 0;
-let isProcessing = false;
+    const video = document.getElementById("video");
+    const canvasElement = document.getElementById("canvas");
+    const canvas = canvasElement.getContext("2d");
+    const chunks = new Map();
+    let totalFrames = 0;
 
-async function startCamera() {
-    const video = document.getElementById('video');
-    try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
+    // Start Camera
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then((stream) => {
         video.srcObject = stream;
-        document.getElementById('status').innerText = "SCANNING...";
-        scan();
-    } catch (err) {
-        alert("Camera error: " + err);
-    }
-}
+        video.setAttribute("playsinline", true); 
+        video.play();
+        requestAnimationFrame(tick);
+    });
 
-async function scan() {
-    const video = document.getElementById('video');
-    const barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
+    function tick() {
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvasElement.hidden = false;
+            canvasElement.height = video.videoHeight;
+            canvasElement.width = video.videoWidth;
+            canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
+            
+            const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
+            // This line requires jsQR.js to be in the folder
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: "dontInvert",
+            });
 
-    setInterval(async () => {
-        try {
-            const barcodes = await barcodeDetector.detect(video);
-            if (barcodes.length > 0) {
-                processData(barcodes[0].rawValue);
+            if (code) {
+                processData(code.data);
             }
-        } catch (e) {
-            // Some browsers require polyfills or specific flags for BarcodeDetector
         }
-    }, 100); // Scan every 100ms
-}
-
-function processData(val) {
-    // Format: "index/total|data"
-    const match = val.match(/^(\d+)\/(\d+)\|(.*)/s);
-    if (!match) return;
-
-    const idx = parseInt(match[1]);
-    const total = parseInt(match[2]);
-    const content = match[3];
-
-    if (totalChunks === 0) totalChunks = total;
-    
-    if (!receivedChunks.has(idx)) {
-        receivedChunks.set(idx, content);
-        updateUI();
+        requestAnimationFrame(tick);
     }
-}
 
-function updateUI() {
-    const count = receivedChunks.size;
-    document.getElementById('progText').innerText = `${count} / ${totalChunks}`;
-    document.getElementById('progBar').max = totalChunks;
-    document.getElementById('progBar').value = count;
+    function processData(data) {
+        const parts = data.match(/^(\d+)\/(\d+)\|(.*)/s);
+        if (!parts) return;
 
-    // Calculate Missing
-    let missing = [];
-    for (let i = 1; i <= totalChunks; i++) {
-        if (!receivedChunks.has(i)) {
-            missing.push(i);
+        const currentIdx = parseInt(parts[1]);
+        const totalIdx = parseInt(parts[2]);
+        const payload = parts[3];
+
+        if (totalFrames === 0) totalFrames = totalIdx;
+        document.getElementById("total").innerText = totalFrames;
+
+        if (!chunks.has(currentIdx)) {
+            chunks.set(currentIdx, payload);
+            updateMissing();
         }
     }
 
-    if (missing.length === 0 && totalChunks > 0) {
-        document.getElementById('status').innerText = "COMPLETE!";
-        document.getElementById('missingList').innerText = "None - All parts received.";
-        assembleData();
-    } else {
-        // Show missing as ranges to save space (e.g., 5-10, 15, 20-25)
-        document.getElementById('missingList').innerText = missing.join(', ');
-    }
-}
+    function updateMissing() {
+        document.getElementById("count").innerText = chunks.size;
+        let missing = [];
+        for (let i = 1; i <= totalFrames; i++) {
+            if (!chunks.has(i)) missing.push(i);
+        }
 
-function assembleData() {
-    let finalStr = "";
-    for (let i = 1; i <= totalChunks; i++) {
-        finalStr += receivedChunks.get(i);
+        if (missing.length === 0) {
+            document.getElementById("missing-list").innerHTML = "<span class='success'>TRANSFER COMPLETE</span>";
+            assemble();
+        } else {
+            document.getElementById("missing-list").innerText = "MISSING: " + missing.join(", ");
+        }
     }
-    document.getElementById('output').value = finalStr;
-}
+
+    function assemble() {
+        let full = "";
+        for (let i = 1; i <= totalFrames; i++) {
+            full += chunks.get(i);
+        }
+        document.getElementById("result").value = full;
+    }
 </script>
 </body>
 </html>
