@@ -2,60 +2,83 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>TXQR RECEIVER V6 - STABLE</title>
-    <!-- You MUST have jsQR.js in the same folder for this to work offline -->
-    <script src="jsQR.js"></script>
+    <title>TXQR RECEIVER V8 - CONNECTED</title>
+    <!-- Automatically loads jsQR from the internet -->
+    <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
     <style>
-        body { background: #000; color: #00ff41; font-family: monospace; text-align: center; }
-        #preview { border: 2px solid #00ff41; width: 100%; max-width: 500px; }
-        .stats { background: #111; padding: 15px; margin: 10px auto; width: 470px; border: 1px solid #333; text-align: left; }
-        .missing { color: #ff4444; border-top: 1px solid #333; margin-top: 10px; padding-top: 10px; word-wrap: break-word; }
-        .success { color: #00ff41; font-weight: bold; }
+        body { background: #000; color: #00ff41; font-family: 'Segoe UI', monospace; text-align: center; padding: 20px; margin: 0; }
+        .box { border: 2px solid #00ff41; display: inline-block; padding: 25px; background: #050505; width: 90%; max-width: 600px; border-radius: 8px; }
+        #video-preview { width: 100%; border: 1px solid #333; background: #111; margin: 15px 0; border-radius: 4px; }
+        .stats { background: #111; padding: 15px; text-align: left; border: 1px solid #222; margin-bottom: 15px; border-radius: 4px; }
+        .missing { color: #ff4444; border-top: 1px solid #333; margin-top: 10px; padding-top: 10px; font-size: 13px; max-height: 120px; overflow-y: auto; line-height: 1.5; }
+        .btn-start { background: #00ff41; color: #000; padding: 18px 30px; font-weight: bold; border: none; cursor: pointer; text-transform: uppercase; width: 100%; border-radius: 4px; font-size: 16px; }
+        .btn-start:hover { background: #00cc33; box-shadow: 0 0 10px #00ff41; }
+        #result { width: 100%; height: 100px; background: #111; color: #666; border: 1px solid #333; margin-top: 15px; font-family: monospace; padding: 10px; box-sizing: border-box; }
+        .success { color: #00ff41; font-weight: bold; font-size: 1.2em; }
+        progress { width: 100%; height: 12px; margin-top: 10px; accent-color: #00ff41; }
     </style>
 </head>
 <body>
-    <h2>TXQR RECEIVER V6</h2>
-    <canvas id="canvas" hidden></canvas>
-    <video id="video" autoplay playsinline></video>
+
+<div class="box">
+    <h2 style="margin-top: 0;">TXQR RECEIVER V8</h2>
     
-    <div class="stats">
-        <div>PROGRESS: <span id="count">0</span> / <span id="total">?</span></div>
-        <div id="missing-list" class="missing">MISSING: Waiting for first frame...</div>
+    <div id="setup-view">
+        <p style="color: #888;">Online Mode: Libraries loaded via CDN.</p>
+        <button class="btn-start" onclick="initCamera()">Activate Camera</button>
     </div>
 
-    <textarea id="result" style="width:500px; height:100px;" readonly></textarea>
+    <video id="video-preview" autoplay playsinline hidden></video>
+    <canvas id="hidden-canvas" hidden></canvas>
+    
+    <div class="stats">
+        <div style="display: flex; justify-content: space-between;">
+            <span>PROGRESS: <b id="count">0</b> / <b id="total">?</b></span>
+            <span id="percent">0%</span>
+        </div>
+        <progress id="pBar" value="0" max="100"></progress>
+        <div id="missing-list" class="missing">MISSING: Waiting for scan...</div>
+    </div>
+
+    <textarea id="result" placeholder="Full data will appear here..." readonly></textarea>
+</div>
 
 <script>
-    const video = document.getElementById("video");
-    const canvasElement = document.getElementById("canvas");
-    const canvas = canvasElement.getContext("2d");
+    const video = document.getElementById("video-preview");
+    const canvasElement = document.getElementById("hidden-canvas");
+    const canvas = canvasElement.getContext("2d", { willReadFrequently: true });
     const chunks = new Map();
     let totalFrames = 0;
+    let scanning = false;
 
-    // Start Camera
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } }).then((stream) => {
-        video.srcObject = stream;
-        video.setAttribute("playsinline", true); 
-        video.play();
-        requestAnimationFrame(tick);
-    });
+    async function initCamera() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ 
+                video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } 
+            });
+            
+            video.srcObject = stream;
+            video.hidden = false;
+            document.getElementById("setup-view").hidden = true;
+            scanning = true;
+            requestAnimationFrame(tick);
+        } catch (err) {
+            alert("Camera Access Denied or Not Supported. Please ensure you are using HTTPS or Localhost.");
+        }
+    }
 
     function tick() {
+        if (!scanning) return;
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
-            canvasElement.hidden = false;
             canvasElement.height = video.videoHeight;
             canvasElement.width = video.videoWidth;
             canvas.drawImage(video, 0, 0, canvasElement.width, canvasElement.height);
-            
             const imageData = canvas.getImageData(0, 0, canvasElement.width, canvasElement.height);
-            // This line requires jsQR.js to be in the folder
-            const code = jsQR(imageData.data, imageData.width, imageData.height, {
-                inversionAttempts: "dontInvert",
-            });
+            
+            // jsQR is available globally via the CDN link above
+            const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: "dontInvert" });
 
-            if (code) {
-                processData(code.data);
-            }
+            if (code) { processData(code.data); }
         }
         requestAnimationFrame(tick);
     }
@@ -68,36 +91,60 @@
         const totalIdx = parseInt(parts[2]);
         const payload = parts[3];
 
-        if (totalFrames === 0) totalFrames = totalIdx;
-        document.getElementById("total").innerText = totalFrames;
+        if (totalFrames === 0) {
+            totalFrames = totalIdx;
+            document.getElementById("total").innerText = totalFrames;
+            document.getElementById("pBar").max = totalFrames;
+        }
 
         if (!chunks.has(currentIdx)) {
             chunks.set(currentIdx, payload);
-            updateMissing();
+            updateUI();
         }
     }
 
-    function updateMissing() {
-        document.getElementById("count").innerText = chunks.size;
+    function updateUI() {
+        const count = chunks.size;
+        document.getElementById("count").innerText = count;
+        document.getElementById("pBar").value = count;
+        document.getElementById("percent").innerText = Math.floor((count/totalFrames)*100) + "%";
+        
         let missing = [];
         for (let i = 1; i <= totalFrames; i++) {
             if (!chunks.has(i)) missing.push(i);
         }
 
-        if (missing.length === 0) {
-            document.getElementById("missing-list").innerHTML = "<span class='success'>TRANSFER COMPLETE</span>";
+        if (missing.length === 0 && totalFrames > 0) {
+            document.getElementById("missing-list").innerHTML = "<span class='success'>✅ TRANSFER COMPLETE</span>";
             assemble();
+            scanning = false;
         } else {
-            document.getElementById("missing-list").innerText = "MISSING: " + missing.join(", ");
+            // Group missing numbers for readability (e.g., 1-5 instead of 1,2,3,4,5)
+            document.getElementById("missing-list").innerText = "MISSING: " + formatRanges(missing);
         }
+    }
+
+    function formatRanges(nums) {
+        if (nums.length === 0) return "";
+        let res = [], start = nums[0], end = nums[0];
+        for (let i = 1; i <= nums.length; i++) {
+            if (i < nums.length && nums[i] === end + 1) {
+                end = nums[i];
+            } else {
+                res.push(start === end ? start : `${start}-${end}`);
+                if (i < nums.length) { start = end = nums[i]; }
+            }
+        }
+        return res.slice(0, 30).join(", ") + (res.length > 30 ? "..." : "");
     }
 
     function assemble() {
         let full = "";
-        for (let i = 1; i <= totalFrames; i++) {
-            full += chunks.get(i);
-        }
-        document.getElementById("result").value = full;
+        for (let i = 1; i <= totalFrames; i++) { full += chunks.get(i); }
+        const resBox = document.getElementById("result");
+        resBox.value = full;
+        resBox.style.color = "#00ff41";
+        resBox.select(); // Auto-select for easy copying
     }
 </script>
 </body>
