@@ -2,31 +2,31 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>TXQR MASTER V23.0</title>
+    <title>TXQR RECEIVER V23.1 - OPTIMIZED</title>
     <style>
         body { background: #000; color: #00ff41; font-family: 'Courier New', monospace; text-align: center; padding: 20px; }
         .container { border: 2px solid #00ff41; display: inline-block; padding: 25px; background: #050505; border-radius: 12px; width: 90%; max-width: 600px; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
-        #video-preview { width: 100%; border: 2px solid #333; background: #111; margin-bottom: 15px; border-radius: 4px; }
+        #video-preview { width: 100%; border: 2px solid #333; background: #111; margin-bottom: 15px; border-radius: 4px; transition: border 0.1s; }
         .ui-panel { background: #111; padding: 15px; border: 1px solid #333; margin: 10px 0; }
-        .progress-box { background: #222; height: 25px; border: 1px solid #00ff41; margin: 10px 0; position: relative; }
+        .progress-box { background: #222; height: 25px; border: 1px solid #00ff41; margin: 10px 0; position: relative; overflow: hidden; }
         #bar { width: 0%; height: 100%; background: #00ff41; transition: width 0.3s; }
-        button { padding: 12px 20px; margin: 5px; cursor: pointer; font-weight: bold; border: none; text-transform: uppercase; }
+        button { padding: 12px 20px; margin: 5px; cursor: pointer; font-weight: bold; border: none; text-transform: uppercase; border-radius: 4px; }
         .btn-cam { background: #0088ff; color: #fff; }
         .btn-stop { background: #ff4444; color: #fff; }
         .btn-download { background: #00ff41; color: #000; display: none; width: 100%; font-size: 1.2em; margin-top: 10px; }
-        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; margin-bottom: 10px; }
+        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; margin-bottom: 10px; text-align: left; }
         .missing-tag { color: #ffbc00; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="container">
-    <h2>TXQR RECEIVER V23.0</h2>
+    <h2>TXQR RECEIVER V23.1</h2>
     
     <video id="video-preview" autoplay playsinline></video>
 
     <div class="ui-panel">
-        <button class="btn-cam" onclick="initCamera()">📷 START CAMERA</button>
+        <button class="btn-cam" onclick="initCamera()">📷 START OPTIMIZED SCAN</button>
         <button class="btn-stop" onclick="killCamera()">🛑 STOP CAMERA</button>
     </div>
 
@@ -45,26 +45,50 @@
 <script src="https://unpkg.com/@zxing/library@latest"></script>
 
 <script>
-    let codeReader = new ZXing.BrowserMultiFormatReader();
-    let videoStream = null;
+    // CRITICAL: Configure Decode Hints for High-Density QR Codes
+    const hints = new Map();
+    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);
+    hints.set(ZXing.DecodeHintType.TRY_HARDER, true); // Deep-scan binarization
+    hints.set(ZXing.DecodeHintType.CHARACTER_SET, 'UTF-8');
+
+    let codeReader = new ZXing.BrowserMultiFormatReader(hints);
     let collectedChunks = new Map();
     let totalFrames = 0;
     let isScanning = false;
 
     async function initCamera() {
+        const videoElem = document.getElementById('video-preview');
         try {
-            const devices = await codeReader.listVideoInputDevices();
-            const selectedId = devices[0].deviceId;
             isScanning = true;
-            document.getElementById('status').innerText = "SCANNING...";
+            document.getElementById('status').innerText = "CALIBRATING...";
             
-            codeReader.decodeFromVideoDevice(selectedId, 'video-preview', (result, err) => {
+            // Request High Resolution to capture small QR modules clearly
+            const constraints = {
+                video: { 
+                    facingMode: "environment",
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                }
+            };
+
+            // Use decodeFromConstraints for better control over the video stream
+            codeReader.decodeFromConstraints(constraints, videoElem, (result, err) => {
                 if (result && isScanning) {
+                    // Success Flash
+                    videoElem.style.borderColor = "#00ff41";
+                    setTimeout(() => videoElem.style.borderColor = "#333", 100);
+                    
                     handlePacket(result.text);
                 }
+                if (err && !(err instanceof ZXing.NotFoundException)) {
+                    console.error("Reader Error:", err);
+                }
             });
+            
+            document.getElementById('status').innerText = "SCANNING...";
         } catch (e) {
-            alert("Camera access denied or not found.");
+            alert("Camera access denied: " + e);
+            document.getElementById('status').innerText = "ERROR";
         }
     }
 
@@ -75,14 +99,16 @@
     }
 
     function handlePacket(raw) {
-        // Format: "1/500|base64..."
-        const parts = raw.split('|');
-        if (parts.length < 2) return;
+        // Expected Protocol: "1/500|base64content..."
+        if (!raw.includes('|') || !raw.includes('/')) return;
 
+        const parts = raw.split('|');
         const meta = parts[0].split('/');
         const current = parseInt(meta[0]);
         const total = parseInt(meta[1]);
         const content = parts[1];
+
+        if (isNaN(current) || isNaN(total)) return;
 
         if (!totalFrames) totalFrames = total;
 
@@ -94,14 +120,13 @@
 
     function refreshUI() {
         const count = collectedChunks.size;
-        const progress = (count / totalFrames) * 100;
+        const progress = totalFrames > 0 ? (count / totalFrames) * 100 : 0;
         
         document.getElementById('count').innerText = count;
-        document.getElementById('total').innerText = totalFrames;
+        document.getElementById('total').innerText = totalFrames || "?";
         document.getElementById('percent').innerText = Math.round(progress) + "%";
         document.getElementById('bar').style.width = progress + "%";
 
-        // Find Next Missing Frame
         let nextMissing = "NONE";
         for (let i = 1; i <= totalFrames; i++) {
             if (!collectedChunks.has(i)) {
@@ -120,14 +145,12 @@
 
     function reconstructAndSave() {
         document.getElementById('status').innerText = "ASSEMBLING...";
-        
         try {
             let fullBase64 = "";
             for (let i = 1; i <= totalFrames; i++) {
                 fullBase64 += collectedChunks.get(i);
             }
 
-            // Convert to binary
             const binaryString = atob(fullBase64);
             const bytes = new Uint8Array(binaryString.length);
             for (let i = 0; i < binaryString.length; i++) {
@@ -138,12 +161,11 @@
             const url = URL.createObjectURL(blob);
             const a = document.createElement("a");
             a.href = url;
-            a.download = "txqr_transfer_" + new Date().getTime() + ".bin";
+            a.download = "txqr_file_" + new Date().getTime() + ".bin";
             a.click();
-            
             document.getElementById('status').innerText = "SAVED!";
         } catch (e) {
-            alert("Reconstruction failed. Ensure the base64 data was valid.");
+            alert("Reconstruction failed. Invalid Base64 data.");
             console.error(e);
         }
     }
