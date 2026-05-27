@@ -3,119 +3,279 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QR Stream Receiver</title>
+    <title>iOS Optimized Data QR Scanner</title>
+    <!-- Using jsQR via CDN to maintain direct control over the video tag properties -->
+    <script src="https://unpkg.com/jsqr/dist/jsQR.js"></script>
     <style>
-        body { font-family: system-ui, sans-serif; background: #222; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
-        .container { background: #333; padding: 20px; border-radius: 8px; max-width: 500px; width: 100%; text-align: center; }
-        #reader { width: 100%; min-height: 300px; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
-        .progress-box { background: #444; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
-        #missing-frames { color: #ffeb3b; font-size: 14px; margin-top: 10px; word-wrap: break-word; }
-        button { background-color: #28a745; color: white; border: none; padding: 15px; font-size: 16px; cursor: pointer; border-radius: 4px; font-weight: bold; width: 100%; display: none; }
-        button:hover { background-color: #218838; }
-        h2, p { margin: 10px 0; }
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        body {
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            width: 100%;
+            max-width: 500px;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        h2 {
+            text-align: center;
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #007aff;
+        }
+        #video-container {
+            position: relative;
+            width: 100%;
+            aspect-ratio: 4/3;
+            background-color: #1e1e1e;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            border: 2px solid #2c2c2e;
+        }
+        video {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .scan-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            pointer-events: none;
+        }
+        .scan-box {
+            width: 60%;
+            aspect-ratio: 1;
+            border: 3px solid #007aff;
+            border-radius: 8px;
+            box-shadow: 0 0 0 4000px rgba(0, 0, 0, 0.5);
+            position: relative;
+        }
+        .scan-box::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 2px;
+            background-color: #007aff;
+            box-shadow: 0 0 8px #007aff;
+            animation: scan 2s linear infinite;
+        }
+        @keyframes scan {
+            0% { top: 0%; }
+            50% { top: 100%; }
+            100% { top: 0%; }
+        }
+        .btn {
+            background-color: #007aff;
+            color: white;
+            border: none;
+            padding: 14px;
+            font-size: 16px;
+            font-weight: 600;
+            border-radius: 8px;
+            cursor: pointer;
+            width: 100%;
+            transition: background-color 0.2s;
+        }
+        .btn:active {
+            background-color: #0056b3;
+        }
+        .btn-secondary {
+            background-color: #2c2c2e;
+            color: #aeaeb2;
+            margin-top: 5px;
+        }
+        #output-panel {
+            background-color: #1e1e1e;
+            border-radius: 12px;
+            padding: 15px;
+            border: 1px solid #2c2c2e;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            margin-bottom: 10px;
+            background-color: #3a3a3c;
+        }
+        .status-ready { background-color: #34c759; color: black; }
+        .status-scanning { background-color: #ff9500; color: black; }
+        .status-error { background-color: #ff3b30; color: white; }
+        
+        #log-area {
+            width: 100%;
+            height: 150px;
+            background-color: #000000;
+            color: #30d158;
+            font-family: monospace;
+            font-size: 13px;
+            padding: 10px;
+            border-radius: 6px;
+            overflow-y: auto;
+            border: 1px solid #2c2c2e;
+            white-space: pre-wrap;
+        }
+        .ios-warning {
+            background-color: rgba(255, 149, 0, 0.15);
+            border: 1px solid #ff9500;
+            color: #ffb340;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 13px;
+            line-height: 1.4;
+        }
     </style>
-    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body>
 
 <div class="container">
-    <h2>Stream Receiver</h2>
-    <p>Point camera at the QR stream.</p>
+    <h2>iOS QR Stream Receiver</h2>
     
-    <div id="reader"></div>
-
-    <div class="progress-box">
-        <h3 id="progress-text">Waiting for first frame...</h3>
-        <div id="missing-frames">Missing: ?</div>
+    <div class="ios-warning">
+        <strong>Mandatory iPhone Rules:</strong><br>
+        1. Open this file over <strong>HTTPS</strong> (e.g., via GitHub Pages or ngrok).<br>
+        2. Run this strictly inside native <strong>Safari</strong>. Third-party iOS web views (like Chrome iOS or in-app wrappers) often limit camera features.
     </div>
 
-    <button id="btnDownload" onclick="downloadData()">Download Complete File</button>
+    <button id="start-btn" class="btn">Tap to Start Scanner</button>
+
+    <div id="video-container" style="display:none;">
+        <!-- The autoplay, playsinline, and muted tags are completely mandatory for iOS Safari -->
+        <video id="webcam-video" autoplay playsinline muted></video>
+        <div class="scan-overlay">
+            <div class="scan-box"></div>
+        </div>
+    </div>
+
+    <div id="output-panel">
+        <div id="status" class="status-badge">Waiting...</div>
+        <div style="font-size: 14px; color: #aeaeb2; margin-bottom: 5px;">Scanned Chunks / Data:</div>
+        <div id="log-area">Ready to collect incoming data...</div>
+        <button id="clear-btn" class="btn btn-secondary">Clear Log</button>
+    </div>
 </div>
 
+<canvas id="hidden-canvas" style="display:none;"></canvas>
+
 <script>
-    let receivedData = [];
-    let totalFrames = 0;
-    let framesCollected = 0;
-    let isComplete = false;
+    const video = document.getElementById('webcam-video');
+    const canvas = document.getElementById('hidden-canvas');
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    const startBtn = document.getElementById('start-btn');
+    const videoContainer = document.getElementById('video-container');
+    const statusBadge = document.getElementById('status');
+    const logArea = document.getElementById('log-area');
+    const clearBtn = document.getElementById('clear-btn');
 
-    // Regular expression to match "[Current/Total]Payload"
-    const headerRegex = /^\[(\d+)\/(\d+)\]([\s\S]*)$/;
+    let isScanning = false;
+    let lastScannedData = null;
 
-    function onScanSuccess(decodedText) {
-        if (isComplete) return;
-
-        const match = decodedText.match(headerRegex);
-        if (!match) return; // Not a part of our stream
-
-        const currentFrame = parseInt(match[1], 10);
-        const total = parseInt(match[2], 10);
-        const payload = match[3];
-
-        // Initialize array on first valid scan
-        if (totalFrames === 0) {
-            totalFrames = total;
-            receivedData = new Array(total).fill(null);
-        }
-
-        // Only save if we haven't seen this frame yet
-        if (receivedData[currentFrame - 1] === null) {
-            receivedData[currentFrame - 1] = payload;
-            framesCollected++;
-            updateUI();
-        }
-    }
-
-    function updateUI() {
-        document.getElementById('progress-text').innerText = `Collected ${framesCollected} / ${totalFrames} Frames`;
-
-        // Calculate missing frames
-        let missing = [];
-        for (let i = 0; i < totalFrames; i++) {
-            if (receivedData[i] === null) missing.push(i + 1);
-        }
-
-        if (missing.length > 0) {
-            // Show up to 10 missing frames to avoid huge text blocks
-            let displayMissing = missing.slice(0, 10).join(", ");
-            if (missing.length > 10) displayMissing += "...";
-            document.getElementById('missing-frames').innerText = `Looking for: ${displayMissing}`;
-        } else {
-            // Stream is fully collected!
-            isComplete = true;
-            document.getElementById('missing-frames').innerText = "All frames collected successfully!";
-            document.getElementById('missing-frames').style.color = "#4caf50";
-            document.getElementById('btnDownload').style.display = "block";
+    startBtn.addEventListener('click', async () => {
+        try {
+            updateStatus('Starting camera...', 'scanning');
             
-            // Optional: Stop the scanner to save battery
-            html5QrcodeScanner.clear();
+            // Hard-coded constraints targeting the exact back camera array on iPhones
+            const constraints = {
+                video: {
+                    facingMode: 'environment',
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false
+            };
+
+            const stream = await navigator.mediaDevices.getUserMedia(constraints);
+            video.srcObject = stream;
+            
+            // Wait for tracks to prime before executing render loop
+            video.onloadedmetadata = () => {
+                video.play();
+                isScanning = true;
+                videoContainer.style.display = 'block';
+                startBtn.style.display = 'none';
+                updateStatus('Scanner Active', 'ready');
+                requestAnimationFrame(tick);
+            };
+
+        } catch (err) {
+            console.error(err);
+            updateStatus('Error: Blocked', 'error');
+            logArea.innerText = `[ERROR]: Access Denied.\n\nVerify that:\n1. Your URL starts with https://n2. You are using native Apple Safari.\n3. Camera permissions are not globally locked in Settings -> Safari -> Camera.`;
+        }
+    });
+
+    function tick() {
+        if (!isScanning) return;
+
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            
+            // Direct processing frame loop via jsQR engine
+            const code = jsQR(imageData.data, imageData.width, imageData.height, {
+                inversionAttempts: "dontInvert", // "dontInvert" saves massive CPU cycles on mobile devices
+            });
+
+            if (code && code.data) {
+                // Skips duplicate processing loops if the current frame holds the identical data chunk
+                if (code.data !== lastScannedData) {
+                    lastScannedData = code.data;
+                    handleData(code.data);
+                }
+            }
+        }
+        requestAnimationFrame(tick);
+    }
+
+    function handleData(data) {
+        const timestamp = new Date().toLocaleTimeString();
+        logArea.innerText = `[${timestamp}] ${data}\n` + logArea.innerText;
+        
+        // Native iOS web UI haptic click feedback
+        if (navigator.vibrate) {
+            navigator.vibrate(80);
         }
     }
 
-    function downloadData() {
-        // Stitch the chunks together
-        const completeString = receivedData.join("");
-        
-        // Create a blob and trigger download
-        const blob = new Blob([completeString], { type: 'text/plain' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = 'QR_Stream_Received.txt';
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+    function updateStatus(text, type) {
+        statusBadge.innerText = text;
+        statusBadge.className = 'status-badge';
+        if (type === 'ready') statusBadge.classList.add('status-ready');
+        if (type === 'scanning') statusBadge.classList.add('status-scanning');
+        if (type === 'error') statusBadge.classList.add('status-error');
     }
 
-    function onScanFailure(error) {
-        // Scanner constantly throws soft errors when no QR is in frame. Ignore them.
-    }
-
-    // Start the webcam scanner
-    let html5QrcodeScanner = new Html5QrcodeScanner(
-        "reader", { fps: 15, qrbox: {width: 250, height: 250} }, false);
-    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
-
+    clearBtn.addEventListener('click', () => {
+        logArea.innerText = '';
+        lastScannedData = null;
+    });
 </script>
+
 </body>
 </html>
