@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>iOS Data Stream Receiver</title>
+    <title>iOS Data Stream Receiver (PDF Output)</title>
     <script src="https://unpkg.com/jsqr/dist/jsQR.js"></script>
     <style>
         * {
@@ -156,7 +156,7 @@
     <div class="metrics-card">
         <div class="status-row">
             <span id="engine-status" style="color: #aeaeb2;">Camera Offline</span>
-            <span id="counter-status">0 / 0 Frames</span>
+            <span id="counter-status">0 / 0 Chunks</span>
         </div>
         
         <div class="progress-bar-wrapper">
@@ -167,7 +167,7 @@
         <div id="missing-tracker">Awaiting stream transmission...</div>
     </div>
 
-    <button id="download-btn" class="btn" onclick="triggerPayloadDownload()">Download Complete Data</button>
+    <button id="download-btn" class="btn" onclick="triggerPdfDownload()">Download Reassembled PDF</button>
     
     <div class="ios-hint"> Ensure this file runs via HTTPS on native iOS Safari for hardware camera processing access.</div>
 </div>
@@ -248,7 +248,7 @@
 
     function evaluateScannedChunk(rawText) {
         const matches = rawText.match(validationRegex);
-        if (!matches) return; // Discard random non-stream QR codes
+        if (!matches) return; 
 
         const currentFrameIndex = parseInt(matches[1], 10) - 1;
         const ultimateTotal = parseInt(matches[2], 10);
@@ -265,7 +265,6 @@
             assembledPayload[currentFrameIndex] = coreDataChunk;
             framesStoredCount++;
             
-            // Native UI micro-haptic nudge for feedback on successful ingestion
             if (navigator.vibrate) navigator.vibrate(40);
             
             refreshInterface();
@@ -273,14 +272,11 @@
     }
 
     function refreshInterface() {
-        // Update fractional counter text
         counterStatus.innerText = `${framesStoredCount} / ${totalFramesExpected} Chunks`;
         
-        // Calculate and modify progress bar slider width
         const linearPercentage = (framesStoredCount / totalFramesExpected) * 100;
         progressFill.style.width = `${linearPercentage}%`;
 
-        // Audit the storage matrix to parse precisely which frames are skipped
         let structuralGaps = [];
         for (let idx = 0; idx < totalFramesExpected; idx++) {
             if (assembledPayload[idx] === null) {
@@ -289,7 +285,6 @@
         }
 
         if (structuralGaps.length > 0) {
-            // Display missing frames to guide the user
             missingTracker.style.color = "#ff9500";
             if (structuralGaps.length <= 12) {
                 missingTracker.innerText = `Missing: ${structuralGaps.join(", ")}`;
@@ -297,7 +292,6 @@
                 missingTracker.innerText = `Missing: ${structuralGaps.slice(0, 12).join(", ")} ... (+${structuralGaps.length - 12} more)`;
             }
         } else {
-            // Compilation Target Reached 
             activeScanning = false;
             engineStatus.innerText = "Transfer Complete";
             engineStatus.style.color = "#34c759";
@@ -305,35 +299,52 @@
             missingTracker.innerText = "Payload completely reassembled. Integrity confirmed.";
             missingTracker.style.color = "#34c759";
             
-            // Release hardware lens allocation thread
             if (video.srcObject) {
                 video.srcObject.getTracks().forEach(track => track.stop());
             }
             videoContainer.style.display = "none";
-            
-            // Surface the functional download interface element
             downloadBtn.style.display = "block";
         }
     }
 
-    function triggerPayloadDownload() {
-        // Seamlessly stitch the data array into a clean unified block
-        const consolidatedString = assembledPayload.join("");
-        
-        // Formulate a native blob structure for safe local iOS sandbox processing
-        const fileBlob = new Blob([consolidatedString], { type: 'text/plain;charset=utf-8' });
-        const localDownloadUrl = URL.createObjectURL(fileBlob);
-        
-        const anchorDOMElement = document.createElement('a');
-        anchorDOMElement.href = localDownloadUrl;
-        anchorDOMElement.download = `QR_Data_Capture_${Math.floor(Date.now() / 1000)}.txt`;
-        
-        document.body.appendChild(anchorDOMElement);
-        anchorDOMElement.click();
-        
-        // Immediate sandbox cleanup handling routines
-        document.body.removeChild(anchorDOMElement);
-        URL.revokeObjectURL(localDownloadUrl);
+    function triggerPdfDownload() {
+        try {
+            // 1. Stitch all Base64 chunks together into a single continuous sequence
+            let continuousBase64 = assembledPayload.join("");
+
+            // 2. Clean out any white spaces, line breaks, or data URI headers that might break atob()
+            continuousBase64 = continuousBase64.replace(/\s/g, "");
+            continuousBase64 = continuousBase64.replace(/^data:application\/pdf;base64,/, "");
+
+            // 3. Process the string into raw binary format
+            const binaryDataString = atob(continuousBase64);
+            const binaryLength = binaryDataString.length;
+            const outputBufferView = new Uint8Array(binaryLength);
+
+            for (let idx = 0; idx < binaryLength; idx++) {
+                outputBufferView[idx] = binaryDataString.charCodeAt(idx);
+            }
+
+            // 4. Wrap the byte sequence inside a true PDF Blob object
+            const nativePdfBlob = new Blob([outputBufferView], { type: 'application/pdf' });
+            const dynamicBlobUrl = URL.createObjectURL(nativePdfBlob);
+
+            // 5. Synthesize click event via memory anchor to trigger clean system file download
+            const executionAnchor = document.createElement('a');
+            executionAnchor.href = dynamicBlobUrl;
+            executionAnchor.download = `Decoded_Document_${Math.floor(Date.now() / 1000)}.pdf`;
+            
+            document.body.appendChild(executionAnchor);
+            executionAnchor.click();
+
+            // 6. Garbage collection
+            document.body.removeChild(executionAnchor);
+            URL.revokeObjectURL(dynamicBlobUrl);
+
+        } catch (error) {
+            alert("Error decoding Base64 string into a valid PDF payload. Please verify sender source data formatting structure.");
+            console.error(error);
+        }
     }
 </script>
 </body>
