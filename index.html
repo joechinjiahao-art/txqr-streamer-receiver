@@ -2,173 +2,120 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>TXQR RECEIVER V23.1 - OPTIMIZED</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QR Stream Receiver</title>
     <style>
-        body { background: #000; color: #00ff41; font-family: 'Courier New', monospace; text-align: center; padding: 20px; }
-        .container { border: 2px solid #00ff41; display: inline-block; padding: 25px; background: #050505; border-radius: 12px; width: 90%; max-width: 600px; box-shadow: 0 0 20px rgba(0,255,65,0.3); }
-        #video-preview { width: 100%; border: 2px solid #333; background: #111; margin-bottom: 15px; border-radius: 4px; transition: border 0.1s; }
-        .ui-panel { background: #111; padding: 15px; border: 1px solid #333; margin: 10px 0; }
-        .progress-box { background: #222; height: 25px; border: 1px solid #00ff41; margin: 10px 0; position: relative; overflow: hidden; }
-        #bar { width: 0%; height: 100%; background: #00ff41; transition: width 0.3s; }
-        button { padding: 12px 20px; margin: 5px; cursor: pointer; font-weight: bold; border: none; text-transform: uppercase; border-radius: 4px; }
-        .btn-cam { background: #0088ff; color: #fff; }
-        .btn-stop { background: #ff4444; color: #fff; }
-        .btn-download { background: #00ff41; color: #000; display: none; width: 100%; font-size: 1.2em; margin-top: 10px; }
-        .info-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; font-size: 13px; margin-bottom: 10px; text-align: left; }
-        .missing-tag { color: #ffbc00; font-weight: bold; }
+        body { font-family: system-ui, sans-serif; background: #222; color: white; display: flex; flex-direction: column; align-items: center; padding: 20px; }
+        .container { background: #333; padding: 20px; border-radius: 8px; max-width: 500px; width: 100%; text-align: center; }
+        #reader { width: 100%; min-height: 300px; background: #000; border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
+        .progress-box { background: #444; padding: 15px; border-radius: 6px; margin-bottom: 20px; }
+        #missing-frames { color: #ffeb3b; font-size: 14px; margin-top: 10px; word-wrap: break-word; }
+        button { background-color: #28a745; color: white; border: none; padding: 15px; font-size: 16px; cursor: pointer; border-radius: 4px; font-weight: bold; width: 100%; display: none; }
+        button:hover { background-color: #218838; }
+        h2, p { margin: 10px 0; }
     </style>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 </head>
 <body>
 
 <div class="container">
-    <h2>TXQR RECEIVER V23.1</h2>
+    <h2>Stream Receiver</h2>
+    <p>Point camera at the QR stream.</p>
     
-    <video id="video-preview" autoplay playsinline></video>
+    <div id="reader"></div>
 
-    <div class="ui-panel">
-        <button class="btn-cam" onclick="initCamera()">📷 START OPTIMIZED SCAN</button>
-        <button class="btn-stop" onclick="killCamera()">🛑 STOP CAMERA</button>
+    <div class="progress-box">
+        <h3 id="progress-text">Waiting for first frame...</h3>
+        <div id="missing-frames">Missing: ?</div>
     </div>
 
-    <div class="info-grid">
-        <div>COLLECTED: <b id="count">0</b> / <b id="total">?</b></div>
-        <div>STATUS: <b id="status">IDLE</b></div>
-        <div>PROGRESS: <b id="percent">0%</b></div>
-        <div>NEXT MISSING: <span id="next-missing" class="missing-tag">NONE</span></div>
-    </div>
-
-    <div class="progress-box"><div id="bar"></div></div>
-
-    <button id="download-btn" class="btn-download" onclick="reconstructAndSave()">💾 DOWNLOAD ASSEMBLED FILE</button>
+    <button id="btnDownload" onclick="downloadData()">Download Complete File</button>
 </div>
 
-<script src="https://unpkg.com/@zxing/library@latest"></script>
-
 <script>
-    // CRITICAL: Configure Decode Hints for High-Density QR Codes
-    const hints = new Map();
-    hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, [ZXing.BarcodeFormat.QR_CODE]);
-    hints.set(ZXing.DecodeHintType.TRY_HARDER, true); // Deep-scan binarization
-    hints.set(ZXing.DecodeHintType.CHARACTER_SET, 'UTF-8');
-
-    let codeReader = new ZXing.BrowserMultiFormatReader(hints);
-    let collectedChunks = new Map();
+    let receivedData = [];
     let totalFrames = 0;
-    let isScanning = false;
+    let framesCollected = 0;
+    let isComplete = false;
 
-    async function initCamera() {
-        const videoElem = document.getElementById('video-preview');
-        try {
-            isScanning = true;
-            document.getElementById('status').innerText = "CALIBRATING...";
-            
-            // Request High Resolution to capture small QR modules clearly
-            const constraints = {
-                video: { 
-                    facingMode: "environment",
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                }
-            };
+    // Regular expression to match "[Current/Total]Payload"
+    const headerRegex = /^\[(\d+)\/(\d+)\]([\s\S]*)$/;
 
-            // Use decodeFromConstraints for better control over the video stream
-            codeReader.decodeFromConstraints(constraints, videoElem, (result, err) => {
-                if (result && isScanning) {
-                    // Success Flash
-                    videoElem.style.borderColor = "#00ff41";
-                    setTimeout(() => videoElem.style.borderColor = "#333", 100);
-                    
-                    handlePacket(result.text);
-                }
-                if (err && !(err instanceof ZXing.NotFoundException)) {
-                    console.error("Reader Error:", err);
-                }
-            });
-            
-            document.getElementById('status').innerText = "SCANNING...";
-        } catch (e) {
-            alert("Camera access denied: " + e);
-            document.getElementById('status').innerText = "ERROR";
+    function onScanSuccess(decodedText) {
+        if (isComplete) return;
+
+        const match = decodedText.match(headerRegex);
+        if (!match) return; // Not a part of our stream
+
+        const currentFrame = parseInt(match[1], 10);
+        const total = parseInt(match[2], 10);
+        const payload = match[3];
+
+        // Initialize array on first valid scan
+        if (totalFrames === 0) {
+            totalFrames = total;
+            receivedData = new Array(total).fill(null);
+        }
+
+        // Only save if we haven't seen this frame yet
+        if (receivedData[currentFrame - 1] === null) {
+            receivedData[currentFrame - 1] = payload;
+            framesCollected++;
+            updateUI();
         }
     }
 
-    function killCamera() {
-        isScanning = false;
-        codeReader.reset();
-        document.getElementById('status').innerText = "CAMERA OFF";
-    }
+    function updateUI() {
+        document.getElementById('progress-text').innerText = `Collected ${framesCollected} / ${totalFrames} Frames`;
 
-    function handlePacket(raw) {
-        // Expected Protocol: "1/500|base64content..."
-        if (!raw.includes('|') || !raw.includes('/')) return;
+        // Calculate missing frames
+        let missing = [];
+        for (let i = 0; i < totalFrames; i++) {
+            if (receivedData[i] === null) missing.push(i + 1);
+        }
 
-        const parts = raw.split('|');
-        const meta = parts[0].split('/');
-        const current = parseInt(meta[0]);
-        const total = parseInt(meta[1]);
-        const content = parts[1];
-
-        if (isNaN(current) || isNaN(total)) return;
-
-        if (!totalFrames) totalFrames = total;
-
-        if (!collectedChunks.has(current)) {
-            collectedChunks.set(current, content);
-            refreshUI();
+        if (missing.length > 0) {
+            // Show up to 10 missing frames to avoid huge text blocks
+            let displayMissing = missing.slice(0, 10).join(", ");
+            if (missing.length > 10) displayMissing += "...";
+            document.getElementById('missing-frames').innerText = `Looking for: ${displayMissing}`;
+        } else {
+            // Stream is fully collected!
+            isComplete = true;
+            document.getElementById('missing-frames').innerText = "All frames collected successfully!";
+            document.getElementById('missing-frames').style.color = "#4caf50";
+            document.getElementById('btnDownload').style.display = "block";
+            
+            // Optional: Stop the scanner to save battery
+            html5QrcodeScanner.clear();
         }
     }
 
-    function refreshUI() {
-        const count = collectedChunks.size;
-        const progress = totalFrames > 0 ? (count / totalFrames) * 100 : 0;
+    function downloadData() {
+        // Stitch the chunks together
+        const completeString = receivedData.join("");
         
-        document.getElementById('count').innerText = count;
-        document.getElementById('total').innerText = totalFrames || "?";
-        document.getElementById('percent').innerText = Math.round(progress) + "%";
-        document.getElementById('bar').style.width = progress + "%";
-
-        let nextMissing = "NONE";
-        for (let i = 1; i <= totalFrames; i++) {
-            if (!collectedChunks.has(i)) {
-                nextMissing = i;
-                break;
-            }
-        }
-        document.getElementById('next-missing').innerText = nextMissing;
-
-        if (count === totalFrames && totalFrames > 0) {
-            document.getElementById('status').innerText = "COMPLETE!";
-            document.getElementById('download-btn').style.display = "block";
-            killCamera();
-        }
+        // Create a blob and trigger download
+        const blob = new Blob([completeString], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'QR_Stream_Received.txt';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     }
 
-    function reconstructAndSave() {
-        document.getElementById('status').innerText = "ASSEMBLING...";
-        try {
-            let fullBase64 = "";
-            for (let i = 1; i <= totalFrames; i++) {
-                fullBase64 += collectedChunks.get(i);
-            }
-
-            const binaryString = atob(fullBase64);
-            const bytes = new Uint8Array(binaryString.length);
-            for (let i = 0; i < binaryString.length; i++) {
-                bytes[i] = binaryString.charCodeAt(i);
-            }
-
-            const blob = new Blob([bytes], { type: "application/octet-stream" });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = "txqr_file_" + new Date().getTime() + ".bin";
-            a.click();
-            document.getElementById('status').innerText = "SAVED!";
-        } catch (e) {
-            alert("Reconstruction failed. Invalid Base64 data.");
-            console.error(e);
-        }
+    function onScanFailure(error) {
+        // Scanner constantly throws soft errors when no QR is in frame. Ignore them.
     }
+
+    // Start the webcam scanner
+    let html5QrcodeScanner = new Html5QrcodeScanner(
+        "reader", { fps: 15, qrbox: {width: 250, height: 250} }, false);
+    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+
 </script>
 </body>
 </html>
